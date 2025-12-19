@@ -182,18 +182,15 @@ body::before {
 
 @keyframes snowfall {
   0% {
-    background-position: 0 0;
+    background-position: 0 -500px;
     opacity: 0;
   }
-  10% {
-    opacity: 1;
-  }
-  80% {
+  15% {
     opacity: 1;
   }
   100% {
-    background-position: 0 2000px;
-    opacity: 0;
+    background-position: 0 1500px;
+    opacity: 1;
   }
 }
 
