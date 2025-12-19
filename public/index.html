@@ -5,22 +5,32 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>TIC Projects Platform - Student Project Management</title>
   <link rel="stylesheet" href="/css/styles.css">
+  <link rel="stylesheet" href="/css/sidebar.css">
 </head>
 <body>
-  <nav>
-    <a href="/" class="logo">TIC Projects</a>
-    <div class="search-bar">
-      <span>🔍</span>
-      <input type="text" id="userSearch" placeholder="Search users..." onkeyup="searchUsers(this.value)">
+  <div class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <h2>Menu</h2>
+      <button class="sidebar-close" onclick="toggleSidebar()">✕</button>
     </div>
+    <div class="sidebar-search">
+      <input type="text" placeholder="Search users..." id="sidebarSearch" onkeyup="searchUsers(this.value)">
+    </div>
+    <ul class="sidebar-menu" id="sidebarMenu"></ul>
+    <div class="sidebar-auth" id="sidebarAuth"></div>
+  </div>
+  <div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
+
+  <nav>
+    <a href="javascript:toggleSidebar()" class="logo" style="cursor: pointer;">TIC Projects</a>
     <div class="nav-links">
       <a href="/">Home</a>
-      <a href="/projects.html">Projects</a>
+      <a href="projects.html">Projects</a>
+      <a href="ratings.html">Ratings</a>
       <div id="authNav"></div>
     </div>
   </nav>
 
-  <div id="searchResultsDropdown" style="display:none; position:fixed; top:80px; left:50%; transform:translateX(-50%); width:400px; max-width:90%; z-index:1001;"></div>
 
   <section class="hero">
     <h1>TIC Projects Platform</h1>
@@ -192,7 +202,80 @@
       }
     });
 
+    updateSidebar();
     updateAuthNav();
+
+    function toggleSidebar() {
+      const sidebar = document.getElementById('sidebar');
+      const overlay = document.getElementById('sidebarOverlay');
+      sidebar.classList.toggle('open');
+      overlay.classList.toggle('open');
+    }
+
+    function updateSidebar() {
+      const menu = document.getElementById('sidebarMenu');
+      const authDiv = document.getElementById('sidebarAuth');
+      const token = localStorage.getItem('token');
+      menu.innerHTML = '';
+      authDiv.innerHTML = '';
+
+      const baseItems = [
+        { text: 'Home', href: '/' },
+        { text: 'Browse Projects', href: 'projects.html' },
+        { text: 'Ratings', href: 'ratings.html' }
+      ];
+
+      baseItems.forEach(item => {
+        const li = document.createElement('li');
+        const a = document.createElement('a');
+        a.href = item.href;
+        a.textContent = item.text;
+        li.appendChild(a);
+        menu.appendChild(li);
+      });
+
+      if (token) {
+        const loggedInItems = [
+          { text: 'Profile', href: 'profile.html' },
+          { text: 'Edit Profile', href: 'edit-profile.html' },
+          { text: 'My Projects', href: 'my-projects.html' },
+          { text: 'Privacy Settings', href: 'privacy.html' },
+          { text: 'Change Password', href: 'change-password.html' }
+        ];
+
+        const divider = document.createElement('div');
+        divider.className = 'sidebar-divider';
+        menu.appendChild(divider);
+
+        loggedInItems.forEach(item => {
+          const li = document.createElement('li');
+          const a = document.createElement('a');
+          a.href = item.href;
+          a.textContent = item.text;
+          li.appendChild(a);
+          menu.appendChild(li);
+        });
+
+        authDiv.innerHTML = `<button class="btn btn-secondary" onclick="logout()">Logout</button>`;
+      } else {
+        authDiv.innerHTML = `
+          <a href="login.html" class="btn btn-primary" style="display: block; text-align: center; padding: 12px;">Login</a>
+          <a href="register.html" class="btn btn-secondary" style="display: block; text-align: center; padding: 12px; margin-top: 10px; border: 2px solid rgba(255,255,255,0.3);">Register</a>
+        `;
+      }
+    }
+
+    function searchUsers(query) {
+      toggleSidebar();
+      if (query.length > 1) {
+        location.href = `projects.html?search=${encodeURIComponent(query)}`;
+      }
+    }
+
+    function logout() {
+      localStorage.removeItem('token');
+      location.href = '/';
+    }
   </script>
 </body>
 </html>

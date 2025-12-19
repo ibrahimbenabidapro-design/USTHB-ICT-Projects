@@ -5,22 +5,31 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Profile - TIC Projects Platform</title>
   <link rel="stylesheet" href="/css/styles.css">
+  <link rel="stylesheet" href="/css/sidebar.css">
 </head>
 <body>
-  <nav>
-    <a href="/" class="logo">TIC Projects</a>
-    <div class="search-bar">
-      <span>🔍</span>
-      <input type="text" id="userSearch" placeholder="Search users..." onkeyup="searchUsers(this.value)">
+  <div class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <h2>Menu</h2>
+      <button class="sidebar-close" onclick="toggleSidebar()">✕</button>
     </div>
+    <div class="sidebar-search">
+      <input type="text" placeholder="Search users..." id="sidebarSearch" onkeyup="searchUsers(this.value)">
+    </div>
+    <ul class="sidebar-menu" id="sidebarMenu"></ul>
+    <div class="sidebar-auth" id="sidebarAuth"></div>
+  </div>
+  <div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
+
+  <nav>
+    <a href="javascript:toggleSidebar()" class="logo" style="cursor: pointer;">TIC Projects</a>
     <div class="nav-links">
       <a href="/">Home</a>
-      <a href="/projects.html">Projects</a>
+      <a href="projects.html">Projects</a>
+      <a href="ratings.html">Ratings</a>
       <div id="authNav"></div>
     </div>
   </nav>
-
-  <div id="searchResultsDropdown" style="display:none; position:fixed; top:80px; left:50%; transform:translateX(-50%); width:400px; max-width:90%; z-index:1001;"></div>
 
   <div class="container">
     <div id="profileContent">
