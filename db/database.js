@@ -1,11 +1,21 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import fs from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const db = new Database(path.join(__dirname, 'tic_projects.db'));
+// SERVERLESS FIX: Use /tmp for Vercel compatibility (or local db in development)
+const dbDir = process.env.NODE_ENV === 'production' && process.env.VERCEL ? '/tmp' : __dirname;
+const dbPath = path.join(dbDir, 'tic_projects.db');
+
+// Ensure directory exists
+if (!fs.existsSync(dbDir) && dbDir !== '/tmp') {
+  fs.mkdirSync(dbDir, { recursive: true });
+}
+
+const db = new Database(dbPath);
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
