@@ -7,12 +7,11 @@
     "start": "node index.js"
   },
   "dependencies": {
-    "bcrypt": "^5.1.1",
-    "better-sqlite3": "^12.5.0",
+    "bcrypt": "^6.0.0",
     "cors": "^2.8.5",
-    "express": "^4.22.1",
-    "jsonwebtoken": "^9.0.3",
-    "multer": "^2.0.2",
+    "express": "^5.0.0",
+    "jsonwebtoken": "^9.1.2",
+    "multer": "^1.4.5-lts.1",
     "pg": "^8.16.3"
   },
   "repository": {
@@ -26,5 +25,5 @@
     "url": "https://github.com/ibrahimbenabidamail-stack/TIC-PROJECTS-PLATFORM/issues"
   },
   "homepage": "https://github.com/ibrahimbenabidamail-stack/TIC-PROJECTS-PLATFORM#readme",
-  "description": ""
+  "description": "A modern platform for USTHB students to showcase projects, with PostgreSQL backend and responsive design"
 }
