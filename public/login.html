@@ -8,9 +8,19 @@
   <style>
     body {
       background: var(--gradient);
+      background-size: 400% 400%;
+      animation: gradientShift 15s ease infinite;
       min-height: 100vh;
       display: flex;
       flex-direction: column;
+    }
+    
+    body::before {
+      animation: floatingOrb 8s ease-in-out infinite;
+    }
+    
+    body::after {
+      animation: floatingOrb2 12s ease-in-out infinite;
     }
     .auth-container {
       flex: 1;
