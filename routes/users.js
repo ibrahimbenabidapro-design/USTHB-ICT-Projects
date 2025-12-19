@@ -1,5 +1,5 @@
 import express from "express";
-import db from "../db/database.js";
+import pool from "../db/postgres.js";
 import { authenticateToken } from "../middleware/auth.js";
 import multer from "multer";
 import path from "path";
@@ -42,57 +42,62 @@ const upload = multer({
   }
 });
 
-router.get("/search", (req, res) => {
+router.get("/search", async (req, res) => {
   try {
     const { q } = req.query;
     if (!q || q.length < 2) {
       return res.json({ users: [] });
     }
 
-    const users = db.prepare(`
+    const result = await pool.query(`
       SELECT id, username, full_name, profile_picture, bio, created_at
       FROM users
-      WHERE username LIKE ? OR full_name LIKE ?
+      WHERE username ILIKE $1 OR full_name ILIKE $1
       LIMIT 20
-    `).all(`%${q}%`, `%${q}%`);
+    `, [`%${q}%`]);
 
-    res.json({ users });
+    res.json({ users: result.rows });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to search users" });
   }
 });
 
-router.get("/me", authenticateToken, (req, res) => {
+router.get("/me", authenticateToken, async (req, res) => {
   try {
-    const user = db.prepare(`
+    const result = await pool.query(`
       SELECT id, username, email, full_name, profile_picture, bio, created_at
-      FROM users WHERE id = ?
-    `).get(req.user.id);
+      FROM users WHERE id = $1
+    `, [req.user.id]);
 
-    if (!user) {
+    if (result.rows.length === 0) {
       return res.status(404).json({ error: "User not found" });
     }
 
-    res.json({ user });
+    res.json({ user: result.rows[0] });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to fetch profile" });
   }
 });
 
-router.put("/me", authenticateToken, upload.single("profile_picture"), (req, res) => {
+router.put("/me", authenticateToken, upload.single("profile_picture"), async (req, res) => {
   try {
     const { username, full_name, bio } = req.body;
 
-    const currentUser = db.prepare("SELECT * FROM users WHERE id = ?").get(req.user.id);
-    if (!currentUser) {
+    const currentUserResult = await pool.query("SELECT * FROM users WHERE id = $1", [req.user.id]);
+    if (currentUserResult.rows.length === 0) {
       return res.status(404).json({ error: "User not found" });
     }
 
+    const currentUser = currentUserResult.rows[0];
+
     if (username && username !== currentUser.username) {
-      const existingUser = db.prepare("SELECT id FROM users WHERE username = ? AND id != ?").get(username, req.user.id);
-      if (existingUser) {
+      const existingResult = await pool.query(
+        "SELECT id FROM users WHERE username = $1 AND id != $2",
+        [username, req.user.id]
+      );
+      if (existingResult.rows.length > 0) {
         return res.status(400).json({ error: "Username already taken" });
       }
     }
@@ -102,53 +107,53 @@ router.put("/me", authenticateToken, upload.single("profile_picture"), (req, res
       profilePicture = `/uploads/avatars/${req.file.filename}`;
     }
 
-    db.prepare(`
-      UPDATE users SET username = ?, full_name = ?, bio = ?, profile_picture = ?
-      WHERE id = ?
-    `).run(
+    await pool.query(`
+      UPDATE users SET username = $1, full_name = $2, bio = $3, profile_picture = $4
+      WHERE id = $5
+    `, [
       username || currentUser.username,
       full_name || currentUser.full_name,
       bio || currentUser.bio,
       profilePicture,
       req.user.id
-    );
+    ]);
 
-    const updatedUser = db.prepare(`
+    const updatedResult = await pool.query(`
       SELECT id, username, email, full_name, profile_picture, bio, created_at
-      FROM users WHERE id = ?
-    `).get(req.user.id);
+      FROM users WHERE id = $1
+    `, [req.user.id]);
 
-    res.json({ message: "Profile updated successfully", user: updatedUser });
+    res.json({ message: "Profile updated successfully", user: updatedResult.rows[0] });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to update profile" });
   }
 });
 
-router.get("/:id", (req, res) => {
+router.get("/:id", async (req, res) => {
   try {
-    const user = db.prepare(`
+    const userResult = await pool.query(`
       SELECT id, username, full_name, profile_picture, bio, created_at
-      FROM users WHERE id = ?
-    `).get(req.params.id);
+      FROM users WHERE id = $1
+    `, [req.params.id]);
 
-    if (!user) {
+    if (userResult.rows.length === 0) {
       return res.status(404).json({ error: "User not found" });
     }
 
-    const projects = db.prepare(`
+    const projectsResult = await pool.query(`
       SELECT projects.*, project_files.file_path,
-        COALESCE(AVG(reviews.rating), 0) as avg_rating,
+        COALESCE(AVG(reviews.rating), 0)::FLOAT as avg_rating,
         COUNT(reviews.id) as review_count
       FROM projects
       LEFT JOIN project_files ON project_files.project_id = projects.id
       LEFT JOIN reviews ON reviews.project_id = projects.id
-      WHERE projects.author_id = ?
-      GROUP BY projects.id
+      WHERE projects.author_id = $1
+      GROUP BY projects.id, project_files.file_path
       ORDER BY projects.created_at DESC
-    `).all(req.params.id);
+    `, [req.params.id]);
 
-    res.json({ user, projects });
+    res.json({ user: userResult.rows[0], projects: projectsResult.rows });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to fetch user" });

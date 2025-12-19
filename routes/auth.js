@@ -1,7 +1,7 @@
 import express from "express";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
-import db from "../db/database.js";
+import pool from "../db/postgres.js";
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key-change-in-production";
@@ -27,17 +27,26 @@ router.post("/register", async (req, res) => {
       return res.status(400).json({ error: "Invalid email format" });
     }
 
-    const existingUser = db.prepare("SELECT id FROM users WHERE email = ? OR username = ?").get(email, username);
-    if (existingUser) {
+    const existingUser = await pool.query(
+      "SELECT id FROM users WHERE email = $1 OR username = $2",
+      [email, username]
+    );
+
+    if (existingUser.rows.length > 0) {
       return res.status(409).json({ error: "Username or email already exists" });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    const result = db.prepare("INSERT INTO users (username, email, password) VALUES (?, ?, ?)").run(username, email, hashedPassword);
+    const result = await pool.query(
+      "INSERT INTO users (username, email, password) VALUES ($1, $2, $3) RETURNING id",
+      [username, email, hashedPassword]
+    );
+
+    const userId = result.rows[0].id;
 
     const token = jwt.sign(
-      { id: result.lastInsertRowid, username, email },
+      { id: userId, username, email },
       JWT_SECRET,
       { expiresIn: "7d" }
     );
@@ -45,7 +54,7 @@ router.post("/register", async (req, res) => {
     res.status(201).json({
       message: "Registration successful",
       token,
-      user: { id: result.lastInsertRowid, username, email }
+      user: { id: userId, username, email }
     });
   } catch (error) {
     console.error("Registration error:", error);
@@ -61,12 +70,18 @@ router.post("/login", async (req, res) => {
       return res.status(400).json({ error: "Email and password are required" });
     }
 
-    const user = db.prepare("SELECT * FROM users WHERE email = ? OR username = ?").get(email, email);
-    if (!user) {
+    const result = await pool.query(
+      "SELECT * FROM users WHERE email = $1 OR username = $1",
+      [email]
+    );
+
+    if (result.rows.length === 0) {
       return res.status(401).json({ error: "Invalid email/username or password" });
     }
 
+    const user = result.rows[0];
     const isPasswordValid = await bcrypt.compare(password, user.password);
+
     if (!isPasswordValid) {
       return res.status(401).json({ error: "Invalid email/username or password" });
     }
@@ -88,24 +103,28 @@ router.post("/login", async (req, res) => {
   }
 });
 
-router.get("/me", (req, res) => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
-
-  if (!token) {
-    return res.status(401).json({ error: "No token provided" });
-  }
-
+router.get("/me", async (req, res) => {
   try {
-    const decoded = jwt.verify(token, JWT_SECRET);
-    const user = db.prepare("SELECT id, username, email, created_at FROM users WHERE id = ?").get(decoded.id);
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
 
-    if (!user) {
+    if (!token) {
+      return res.status(401).json({ error: "No token provided" });
+    }
+
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const result = await pool.query(
+      "SELECT id, username, email, created_at FROM users WHERE id = $1",
+      [decoded.id]
+    );
+
+    if (result.rows.length === 0) {
       return res.status(404).json({ error: "User not found" });
     }
 
-    res.json({ user });
+    res.json({ user: result.rows[0] });
   } catch (error) {
+    console.error("Auth error:", error);
     return res.status(403).json({ error: "Invalid token" });
   }
 });

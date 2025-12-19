@@ -1,5 +1,5 @@
 import express from "express";
-import db from "../db/database.js";
+import pool from "../db/postgres.js";
 import { authenticateToken } from "../middleware/auth.js";
 import multer from "multer";
 import path from "path";
@@ -33,7 +33,7 @@ const upload = multer({
   limits: { fileSize: 20 * 1024 * 1024 }
 });
 
-router.get("/", (req, res) => {
+router.get("/", async (req, res) => {
   try {
     const { section, group } = req.query;
     
@@ -50,7 +50,7 @@ router.get("/", (req, res) => {
         users.username AS author_name,
         users.id AS author_id,
         project_files.file_path,
-        COALESCE(AVG(reviews.rating), 0) as avg_rating,
+        COALESCE(AVG(reviews.rating), 0)::FLOAT as avg_rating,
         COUNT(reviews.id) as review_count
       FROM projects
       JOIN users ON users.id = projects.author_id
@@ -58,15 +58,15 @@ router.get("/", (req, res) => {
       LEFT JOIN reviews ON reviews.project_id = projects.id
     `;
     
-    const conditions = [];
     const params = [];
+    const conditions = [];
     
     if (section) {
-      conditions.push("projects.section = ?");
+      conditions.push(`projects.section = $${params.length + 1}`);
       params.push(section);
     }
     if (group) {
-      conditions.push("projects.group_number = ?");
+      conditions.push(`projects.group_number = $${params.length + 1}`);
       params.push(group);
     }
     
@@ -74,19 +74,19 @@ router.get("/", (req, res) => {
       query += " WHERE " + conditions.join(" AND ");
     }
     
-    query += " GROUP BY projects.id ORDER BY projects.created_at DESC";
+    query += " GROUP BY projects.id, users.username, users.id, project_files.file_path ORDER BY projects.created_at DESC";
     
-    const projects = db.prepare(query).all(...params);
-    res.json({ projects });
+    const result = await pool.query(query, params);
+    res.json({ projects: result.rows });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to load projects" });
   }
 });
 
-router.get("/:id", (req, res) => {
+router.get("/:id", async (req, res) => {
   try {
-    const project = db.prepare(`
+    const result = await pool.query(`
       SELECT
         projects.id,
         projects.title,
@@ -99,28 +99,28 @@ router.get("/:id", (req, res) => {
         users.username AS author_name,
         users.id AS author_id,
         project_files.file_path,
-        COALESCE(AVG(reviews.rating), 0) as avg_rating,
+        COALESCE(AVG(reviews.rating), 0)::FLOAT as avg_rating,
         COUNT(reviews.id) as review_count
       FROM projects
       JOIN users ON users.id = projects.author_id
       LEFT JOIN project_files ON project_files.project_id = projects.id
       LEFT JOIN reviews ON reviews.project_id = projects.id
-      WHERE projects.id = ?
-      GROUP BY projects.id
-    `).get(req.params.id);
+      WHERE projects.id = $1
+      GROUP BY projects.id, users.username, users.id, project_files.file_path
+    `, [req.params.id]);
 
-    if (!project) {
+    if (result.rows.length === 0) {
       return res.status(404).json({ error: "Project not found" });
     }
 
-    res.json({ project });
+    res.json({ project: result.rows[0] });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to fetch project" });
   }
 });
 
-router.post("/", authenticateToken, upload.single("file"), (req, res) => {
+router.post("/", authenticateToken, upload.single("file"), async (req, res) => {
   try {
     const { title, description, section, group_number, full_name, matricule } = req.body;
 
@@ -136,52 +136,58 @@ router.post("/", authenticateToken, upload.single("file"), (req, res) => {
       return res.status(400).json({ error: "Description must be at least 10 characters" });
     }
 
-    const result = db.prepare(`
+    const result = await pool.query(`
       INSERT INTO projects (title, description, author_id, section, group_number, full_name, matricule)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(title, description, req.user.id, section || null, group_number || null, full_name || null, matricule || null);
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      RETURNING id
+    `, [title, description, req.user.id, section || null, group_number || null, full_name || null, matricule || null]);
 
-    const projectId = result.lastInsertRowid;
+    const projectId = result.rows[0].id;
 
     if (req.file) {
       const filePath = `/uploads/${req.file.filename}`;
-      db.prepare(`INSERT INTO project_files (project_id, file_path) VALUES (?, ?)`).run(projectId, filePath);
+      await pool.query(
+        `INSERT INTO project_files (project_id, file_path) VALUES ($1, $2)`,
+        [projectId, filePath]
+      );
     }
 
-    const project = db.prepare(`
+    const projectResult = await pool.query(`
       SELECT projects.*, users.username AS author_name, project_files.file_path
       FROM projects
       JOIN users ON users.id = projects.author_id
       LEFT JOIN project_files ON project_files.project_id = projects.id
-      WHERE projects.id = ?
-    `).get(projectId);
+      WHERE projects.id = $1
+    `, [projectId]);
 
-    res.status(201).json({ message: "Project created successfully", project });
+    res.status(201).json({ message: "Project created successfully", project: projectResult.rows[0] });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to create project" });
   }
 });
 
-router.put("/:id", authenticateToken, (req, res) => {
+router.put("/:id", authenticateToken, async (req, res) => {
   try {
     const { title, description, section, group_number, full_name, matricule } = req.body;
     const projectId = req.params.id;
 
-    const project = db.prepare("SELECT * FROM projects WHERE id = ?").get(projectId);
+    const projectResult = await pool.query("SELECT * FROM projects WHERE id = $1", [projectId]);
 
-    if (!project) {
+    if (projectResult.rows.length === 0) {
       return res.status(404).json({ error: "Project not found" });
     }
+
+    const project = projectResult.rows[0];
 
     if (project.author_id !== req.user.id) {
       return res.status(403).json({ error: "You can only edit your own projects" });
     }
 
-    db.prepare(`
-      UPDATE projects SET title = ?, description = ?, section = ?, group_number = ?, full_name = ?, matricule = ?
-      WHERE id = ?
-    `).run(title, description, section, group_number, full_name, matricule, projectId);
+    await pool.query(`
+      UPDATE projects SET title = $1, description = $2, section = $3, group_number = $4, full_name = $5, matricule = $6
+      WHERE id = $7
+    `, [title, description, section, group_number, full_name, matricule, projectId]);
 
     res.json({ message: "Project updated successfully" });
   } catch (err) {
@@ -190,22 +196,24 @@ router.put("/:id", authenticateToken, (req, res) => {
   }
 });
 
-router.delete("/:id", authenticateToken, (req, res) => {
+router.delete("/:id", authenticateToken, async (req, res) => {
   try {
     const projectId = req.params.id;
-    const project = db.prepare("SELECT * FROM projects WHERE id = ?").get(projectId);
+    const projectResult = await pool.query("SELECT * FROM projects WHERE id = $1", [projectId]);
 
-    if (!project) {
+    if (projectResult.rows.length === 0) {
       return res.status(404).json({ error: "Project not found" });
     }
+
+    const project = projectResult.rows[0];
 
     if (project.author_id !== req.user.id) {
       return res.status(403).json({ error: "You can only delete your own projects" });
     }
 
-    db.prepare("DELETE FROM reviews WHERE project_id = ?").run(projectId);
-    db.prepare("DELETE FROM project_files WHERE project_id = ?").run(projectId);
-    db.prepare("DELETE FROM projects WHERE id = ?").run(projectId);
+    await pool.query("DELETE FROM reviews WHERE project_id = $1", [projectId]);
+    await pool.query("DELETE FROM project_files WHERE project_id = $1", [projectId]);
+    await pool.query("DELETE FROM projects WHERE id = $1", [projectId]);
 
     res.json({ message: "Project deleted successfully" });
   } catch (err) {
@@ -214,7 +222,7 @@ router.delete("/:id", authenticateToken, (req, res) => {
   }
 });
 
-router.post("/:id/reviews", authenticateToken, (req, res) => {
+router.post("/:id/reviews", authenticateToken, async (req, res) => {
   try {
     const { rating, comment } = req.body;
     const projectId = req.params.id;
@@ -223,18 +231,27 @@ router.post("/:id/reviews", authenticateToken, (req, res) => {
       return res.status(400).json({ error: "Rating must be between 1 and 5" });
     }
 
-    const project = db.prepare("SELECT * FROM projects WHERE id = ?").get(projectId);
-    if (!project) {
+    const projectResult = await pool.query("SELECT * FROM projects WHERE id = $1", [projectId]);
+    if (projectResult.rows.length === 0) {
       return res.status(404).json({ error: "Project not found" });
     }
 
-    const existingReview = db.prepare("SELECT * FROM reviews WHERE project_id = ? AND reviewer_id = ?").get(projectId, req.user.id);
+    const existingReviewResult = await pool.query(
+      "SELECT * FROM reviews WHERE project_id = $1 AND reviewer_id = $2",
+      [projectId, req.user.id]
+    );
 
-    if (existingReview) {
-      db.prepare("UPDATE reviews SET rating = ?, comment = ? WHERE id = ?").run(rating, comment || null, existingReview.id);
+    if (existingReviewResult.rows.length > 0) {
+      await pool.query(
+        "UPDATE reviews SET rating = $1, comment = $2 WHERE id = $3",
+        [rating, comment || null, existingReviewResult.rows[0].id]
+      );
       res.json({ message: "Review updated successfully" });
     } else {
-      db.prepare("INSERT INTO reviews (project_id, reviewer_id, rating, comment) VALUES (?, ?, ?, ?)").run(projectId, req.user.id, rating, comment || null);
+      await pool.query(
+        "INSERT INTO reviews (project_id, reviewer_id, rating, comment) VALUES ($1, $2, $3, $4)",
+        [projectId, req.user.id, rating, comment || null]
+      );
       res.status(201).json({ message: "Review added successfully" });
     }
   } catch (err) {
@@ -243,29 +260,32 @@ router.post("/:id/reviews", authenticateToken, (req, res) => {
   }
 });
 
-router.get("/:id/reviews", (req, res) => {
+router.get("/:id/reviews", async (req, res) => {
   try {
     const projectId = req.params.id;
-    const reviews = db.prepare(`
+    const result = await pool.query(`
       SELECT reviews.*, users.username, users.profile_picture
       FROM reviews
       JOIN users ON users.id = reviews.reviewer_id
-      WHERE reviews.project_id = ?
+      WHERE reviews.project_id = $1
       ORDER BY reviews.created_at DESC
-    `).all(projectId);
+    `, [projectId]);
 
-    res.json({ reviews });
+    res.json({ reviews: result.rows });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to load reviews" });
   }
 });
 
-router.get("/:id/my-review", authenticateToken, (req, res) => {
+router.get("/:id/my-review", authenticateToken, async (req, res) => {
   try {
     const projectId = req.params.id;
-    const review = db.prepare("SELECT * FROM reviews WHERE project_id = ? AND reviewer_id = ?").get(projectId, req.user.id);
-    res.json({ review: review || null });
+    const result = await pool.query(
+      "SELECT * FROM reviews WHERE project_id = $1 AND reviewer_id = $2",
+      [projectId, req.user.id]
+    );
+    res.json({ review: result.rows[0] || null });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to fetch review" });
