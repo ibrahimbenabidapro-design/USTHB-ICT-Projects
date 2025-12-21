@@ -1,42 +1,8 @@
 import express from "express";
 import pool from "../db/postgres.js";
 import { authenticateToken } from "../middleware/auth.js";
-import multer from "multer";
 
 const router = express.Router();
-
-// Use memory storage for Vercel serverless compatibility
-// Files are stored in req.file.buffer instead of disk
-const storage = multer.memoryStorage();
-
-const upload = multer({
-  storage,
-  limits: { fileSize: 5 * 1024 * 1024 },
-  fileFilter: (req, file, cb) => {
-    const allowedTypes = /jpeg|jpg|png|gif|webp/;
-    const extname = allowedTypes.test(file.originalname.split('.').pop().toLowerCase());
-    const mimetype = allowedTypes.test(file.mimetype);
-    if (extname && mimetype) {
-      return cb(null, true);
-    }
-    cb(new Error("Only image files are allowed"));
-  }
-});
-
-// Middleware to handle multer errors gracefully
-const handleMulterError = (err, req, res, next) => {
-  if (err instanceof multer.MulterError) {
-    console.error("[ERROR] Multer error:", err.code, err.message);
-    if (err.code === 'LIMIT_FILE_SIZE') {
-      return res.status(400).json({ error: "File too large. Maximum 5MB allowed." });
-    }
-    return res.status(400).json({ error: `File upload error: ${err.message}` });
-  } else if (err) {
-    console.error("[ERROR] File filter error:", err.message);
-    return res.status(400).json({ error: err.message });
-  }
-  next();
-};
 
 router.get("/search", async (req, res) => {
   try {
@@ -77,16 +43,13 @@ router.get("/me", authenticateToken, async (req, res) => {
   }
 });
 
-router.put("/me", authenticateToken, upload.single("profile_picture"), handleMulterError, async (req, res) => {
+router.put("/me", authenticateToken, async (req, res) => {
   try {
     const { username, full_name, bio } = req.body;
 
-    // Validate required fields
-    if (!username || username.trim() === "") {
+    if (!username || !username.trim()) {
       return res.status(400).json({ error: "Username is required" });
     }
-
-    console.log("[INFO] PUT /users/me - Starting profile update for user:", req.user?.id);
 
     const currentUserResult = await pool.query("SELECT * FROM users WHERE id = $1", [req.user.id]);
     if (currentUserResult.rows.length === 0) {
@@ -105,33 +68,13 @@ router.put("/me", authenticateToken, upload.single("profile_picture"), handleMul
       }
     }
 
-    let profilePicture = currentUser.profile_picture;
-    
-    // Handle in-memory file buffer from multer
-    if (req.file) {
-      // Option 1: Store as base64 (simple, but database grows)
-      // profilePicture = `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`;
-      
-      // Option 2: Upload to Cloudinary (recommended for production)
-      // See VERCEL_SETUP.md for Cloudinary integration
-      // For now, keep existing picture if upload service is not configured
-      if (process.env.CLOUDINARY_URL) {
-        // Placeholder - would be handled by cloudinary integration
-        // Example: profilePicture = await uploadToCloudinary(req.file.buffer, req.file.mimetype);
-        console.warn("[WARN] Cloudinary integration not yet configured. Keeping existing profile picture.");
-      } else {
-        console.warn("[WARN] Profile picture upload ignored - no external storage configured. Configure CLOUDINARY_URL in .env");
-      }
-    }
-
     await pool.query(`
-      UPDATE users SET username = $1, full_name = $2, bio = $3, profile_picture = $4
-      WHERE id = $5
+      UPDATE users SET username = $1, full_name = $2, bio = $3
+      WHERE id = $4
     `, [
       username || currentUser.username,
       full_name || currentUser.full_name,
       bio || currentUser.bio,
-      profilePicture,
       req.user.id
     ]);
 
@@ -142,27 +85,8 @@ router.put("/me", authenticateToken, upload.single("profile_picture"), handleMul
 
     res.json({ message: "Profile updated successfully", user: updatedResult.rows[0] });
   } catch (err) {
-    console.error("[ERROR] PUT /users/me - Profile update failed:");
-    console.error("Error name:", err.name);
-    console.error("Error code:", err.code);
-    console.error("Error message:", err.message);
-    console.error("Error stack:", err.stack);
-    console.error("Request body:", req.body);
-    console.error("Request user ID:", req.user?.id);
-    console.error("Multer file info:", req.file ? { mimetype: req.file.mimetype, size: req.file.size, encoding: req.file.encoding } : "No file");
-    
-    // Check for specific database errors
-    if (err.code === 'ECONNREFUSED') {
-      console.error("[CRITICAL] Database connection refused - check DATABASE_URL");
-      return res.status(503).json({ error: "Database unavailable" });
-    }
-    
-    if (err.code === 'ENOTFOUND') {
-      console.error("[CRITICAL] Database host not found - check DATABASE_URL");
-      return res.status(503).json({ error: "Database unavailable" });
-    }
-    
-    res.status(500).json({ error: "Failed to update profile", details: process.env.NODE_ENV === "development" ? err.message : undefined });
+    console.error(err);
+    res.status(500).json({ error: "Failed to update profile" });
   }
 });
 

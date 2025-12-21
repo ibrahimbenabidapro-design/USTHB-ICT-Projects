@@ -323,16 +323,20 @@
 
     document.getElementById('editForm').addEventListener('submit', async (e) => {
       e.preventDefault();
-      const formData = new FormData(e.target);
       const messageDiv = document.getElementById('editMessage');
 
       try {
         const response = await fetch('/users/me', {
           method: 'PUT',
           headers: {
-            'Authorization': `Bearer ${token}`
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
           },
-          body: formData
+          body: JSON.stringify({
+            username: document.getElementById('editUsername').value,
+            full_name: document.getElementById('editFullName').value,
+            bio: document.getElementById('editBio').value
+          })
         });
 
         const data = await response.json();
