@@ -1,14 +1,33 @@
 import pkg from 'pg';
 const { Pool } = pkg;
 
+// Check if DATABASE_URL is set
+if (!process.env.DATABASE_URL) {
+  console.warn('[WARN] DATABASE_URL not set - database features will be unavailable');
+}
+
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+  // Increase timeout for Vercel cold starts
+  connectionTimeoutMillis: 30000,
+  idleTimeoutMillis: 30000,
+  max: 5, // Limit connections for serverless
 });
 
-// Initialize schema on startup
+// Log connection errors
+pool.on('error', (err) => {
+  console.error('[ERROR] Unexpected pool error:', err.message);
+});
+
+pool.on('connect', () => {
+  console.log('[INFO] Database pool connection established');
+});
+
+// Initialize schema on startup (non-blocking)
 async function initializeSchema() {
   try {
+    console.log('[INFO] Initializing database schema...');
     const client = await pool.connect();
     
     // Create users table
@@ -64,14 +83,22 @@ async function initializeSchema() {
     `);
 
     client.release();
-    console.log('Database schema initialized successfully');
+    console.log('[INFO] Database schema initialized successfully');
   } catch (err) {
-    console.error('Error initializing database schema:', err);
-    process.exit(1);
+    console.error('[ERROR] Failed to initialize database schema:', err.message);
+    console.error('[ERROR] Stack:', err.stack);
+    if (process.env.NODE_ENV === 'development') {
+      process.exit(1);
+    } else {
+      // On production (Vercel), continue even if schema init fails
+      console.error('[WARN] Continuing without schema initialization - manual setup may be required');
+    }
   }
 }
 
-// Initialize on module load
-await initializeSchema();
+// Initialize schema asynchronously (don't block server startup)
+initializeSchema().catch(err => {
+  console.error('[CRITICAL] Schema initialization failed:', err.message);
+});
 
 export default pool;

@@ -23,6 +23,21 @@ const upload = multer({
   }
 });
 
+// Middleware to handle multer errors gracefully
+const handleMulterError = (err, req, res, next) => {
+  if (err instanceof multer.MulterError) {
+    console.error("[ERROR] Multer error:", err.code, err.message);
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({ error: "File too large. Maximum 5MB allowed." });
+    }
+    return res.status(400).json({ error: `File upload error: ${err.message}` });
+  } else if (err) {
+    console.error("[ERROR] File filter error:", err.message);
+    return res.status(400).json({ error: err.message });
+  }
+  next();
+};
+
 router.get("/search", async (req, res) => {
   try {
     const { q } = req.query;
@@ -62,7 +77,7 @@ router.get("/me", authenticateToken, async (req, res) => {
   }
 });
 
-router.put("/me", authenticateToken, upload.single("profile_picture"), async (req, res) => {
+router.put("/me", authenticateToken, upload.single("profile_picture"), handleMulterError, async (req, res) => {
   try {
     const { username, full_name, bio } = req.body;
 
@@ -70,6 +85,8 @@ router.put("/me", authenticateToken, upload.single("profile_picture"), async (re
     if (!username || username.trim() === "") {
       return res.status(400).json({ error: "Username is required" });
     }
+
+    console.log("[INFO] PUT /users/me - Starting profile update for user:", req.user?.id);
 
     const currentUserResult = await pool.query("SELECT * FROM users WHERE id = $1", [req.user.id]);
     if (currentUserResult.rows.length === 0) {
@@ -126,11 +143,24 @@ router.put("/me", authenticateToken, upload.single("profile_picture"), async (re
     res.json({ message: "Profile updated successfully", user: updatedResult.rows[0] });
   } catch (err) {
     console.error("[ERROR] PUT /users/me - Profile update failed:");
+    console.error("Error name:", err.name);
+    console.error("Error code:", err.code);
     console.error("Error message:", err.message);
     console.error("Error stack:", err.stack);
     console.error("Request body:", req.body);
     console.error("Request user ID:", req.user?.id);
     console.error("Multer file info:", req.file ? { mimetype: req.file.mimetype, size: req.file.size, encoding: req.file.encoding } : "No file");
+    
+    // Check for specific database errors
+    if (err.code === 'ECONNREFUSED') {
+      console.error("[CRITICAL] Database connection refused - check DATABASE_URL");
+      return res.status(503).json({ error: "Database unavailable" });
+    }
+    
+    if (err.code === 'ENOTFOUND') {
+      console.error("[CRITICAL] Database host not found - check DATABASE_URL");
+      return res.status(503).json({ error: "Database unavailable" });
+    }
     
     res.status(500).json({ error: "Failed to update profile", details: process.env.NODE_ENV === "development" ? err.message : undefined });
   }
