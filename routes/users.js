@@ -2,38 +2,19 @@ import express from "express";
 import pool from "../db/postgres.js";
 import { authenticateToken } from "../middleware/auth.js";
 import multer from "multer";
-import path from "path";
-import fs from "fs";
-import { fileURLToPath } from "url";
 
 const router = express.Router();
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-const uploadDir = path.join(__dirname, "..", "public", "uploads", "avatars");
-
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadDir);
-  },
-  filename: (req, file, cb) => {
-    const uniqueName = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    const ext = path.extname(file.originalname);
-    cb(null, "avatar-" + uniqueName + ext);
-  }
-});
+// Use memory storage for Vercel serverless compatibility
+// Files are stored in req.file.buffer instead of disk
+const storage = multer.memoryStorage();
 
 const upload = multer({
   storage,
   limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const allowedTypes = /jpeg|jpg|png|gif|webp/;
-    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+    const extname = allowedTypes.test(file.originalname.split('.').pop().toLowerCase());
     const mimetype = allowedTypes.test(file.mimetype);
     if (extname && mimetype) {
       return cb(null, true);
@@ -58,7 +39,7 @@ router.get("/search", async (req, res) => {
 
     res.json({ users: result.rows });
   } catch (err) {
-    console.error(err);
+    console.error("[ERROR] GET /users/search:", err.message, err.stack);
     res.status(500).json({ error: "Failed to search users" });
   }
 });
@@ -76,7 +57,7 @@ router.get("/me", authenticateToken, async (req, res) => {
 
     res.json({ user: result.rows[0] });
   } catch (err) {
-    console.error(err);
+    console.error("[ERROR] GET /users/me:", err.message, err.stack);
     res.status(500).json({ error: "Failed to fetch profile" });
   }
 });
@@ -84,6 +65,11 @@ router.get("/me", authenticateToken, async (req, res) => {
 router.put("/me", authenticateToken, upload.single("profile_picture"), async (req, res) => {
   try {
     const { username, full_name, bio } = req.body;
+
+    // Validate required fields
+    if (!username || username.trim() === "") {
+      return res.status(400).json({ error: "Username is required" });
+    }
 
     const currentUserResult = await pool.query("SELECT * FROM users WHERE id = $1", [req.user.id]);
     if (currentUserResult.rows.length === 0) {
@@ -103,8 +89,22 @@ router.put("/me", authenticateToken, upload.single("profile_picture"), async (re
     }
 
     let profilePicture = currentUser.profile_picture;
+    
+    // Handle in-memory file buffer from multer
     if (req.file) {
-      profilePicture = `/uploads/avatars/${req.file.filename}`;
+      // Option 1: Store as base64 (simple, but database grows)
+      // profilePicture = `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`;
+      
+      // Option 2: Upload to Cloudinary (recommended for production)
+      // See VERCEL_SETUP.md for Cloudinary integration
+      // For now, keep existing picture if upload service is not configured
+      if (process.env.CLOUDINARY_URL) {
+        // Placeholder - would be handled by cloudinary integration
+        // Example: profilePicture = await uploadToCloudinary(req.file.buffer, req.file.mimetype);
+        console.warn("[WARN] Cloudinary integration not yet configured. Keeping existing profile picture.");
+      } else {
+        console.warn("[WARN] Profile picture upload ignored - no external storage configured. Configure CLOUDINARY_URL in .env");
+      }
     }
 
     await pool.query(`
@@ -125,8 +125,14 @@ router.put("/me", authenticateToken, upload.single("profile_picture"), async (re
 
     res.json({ message: "Profile updated successfully", user: updatedResult.rows[0] });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Failed to update profile" });
+    console.error("[ERROR] PUT /users/me - Profile update failed:");
+    console.error("Error message:", err.message);
+    console.error("Error stack:", err.stack);
+    console.error("Request body:", req.body);
+    console.error("Request user ID:", req.user?.id);
+    console.error("Multer file info:", req.file ? { mimetype: req.file.mimetype, size: req.file.size, encoding: req.file.encoding } : "No file");
+    
+    res.status(500).json({ error: "Failed to update profile", details: process.env.NODE_ENV === "development" ? err.message : undefined });
   }
 });
 
@@ -155,7 +161,7 @@ router.get("/:id", async (req, res) => {
 
     res.json({ user: userResult.rows[0], projects: projectsResult.rows });
   } catch (err) {
-    console.error(err);
+    console.error("[ERROR] GET /users/:id:", err.message, err.stack);
     res.status(500).json({ error: "Failed to fetch user" });
   }
 });
